@@ -42,7 +42,7 @@ urlpatterns = [
 
 
     
-    path('jobs/<str:job_id>/analyze-resumes/', views.analyze_resumes_view, name='job-analyze-resumes'),
+    # path('jobs/<str:job_id>/analyze-resumes/', views.analyze_resumes_view, name='job-analyze-resumes'),
 
 
     path('applications/hr/', views.all_hr_applications_view, name='hr-all-applications'), # HR only

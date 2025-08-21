@@ -50,12 +50,7 @@ from django.http import HttpResponseBadRequest
 from razorpay.errors import SignatureVerificationError
 client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
 from django.http import StreamingHttpResponse
-from .resume_analysis import (
-    extract_metadata_text,
-    looks_like_resume,
-    sbert_similarity_percent,
-    extract_text_from_pdf_bytes
-)
+
 import tempfile
 
 def verify_signature(payment_id, subscription_id, signature, secret):
@@ -627,6 +622,46 @@ class AdminViewSet(viewsets.ModelViewSet):
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data)
     
+    @action(detail=False, methods=['get'], url_path='get-resume-url')
+    def get_resume_url(self, request):
+        """
+        Admin-only: Fetch pre-signed S3 URL for a user's resume using user ID or username.
+        Example: /admin/get-resume-url/?user_id=123 or ?username=user@example.com
+        """
+
+        user_id = request.query_params.get('user_id')
+        username = request.query_params.get('username')
+
+        if not user_id and not username:
+            return Response({"detail": "Provide either 'user_id' or 'username'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            if user_id:
+                user = User.objects.get(id=user_id)
+            else:
+                user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not user.resume_key:
+            return Response({"detail": "This user has no resume uploaded."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            s3 = boto3.client('s3',
+                            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                            region_name=settings.AWS_S3_REGION_NAME)
+
+            presigned_url = s3.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': settings.AWS_STORAGE_BUCKET_NAME, 'Key': user.resume_key},
+                ExpiresIn=3600
+            )
+        except ClientError as e:
+            return Response({"detail": "Failed to generate URL", "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({"resume_url": presigned_url}, status=status.HTTP_200_OK)
+    
     # @action(detail=False, methods=['get'])
     # def users_all_stream(self, request):
     #     def user_generator():
@@ -936,68 +971,68 @@ def specific_job_applications_view(request, job_id: str) -> Response:
 
 # import requests
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def analyze_resumes_view(request, job_id: str) -> Response:
-    user = request.user
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def analyze_resumes_view(request, job_id: str) -> Response:
+#     user = request.user
 
-    if user.role != 'hr':
-        return Response({"error": "Only HRs can access this."}, status=403)
+#     if user.role != 'hr':
+#         return Response({"error": "Only HRs can access this."}, status=403)
 
-    job = get_object_or_404(Job, id=job_id, created_by=user)
-    applications = JobApplication.objects.filter(job=job)
-    job_description = job.description or ""
+#     job = get_object_or_404(Job, id=job_id, created_by=user)
+#     applications = JobApplication.objects.filter(job=job)
+#     job_description = job.description or ""
 
-    analysis_results = []
+#     analysis_results = []
 
-    for app in applications:
-        if not app.resume_url:
-            continue
+#     for app in applications:
+#         if not app.resume_url:
+#             continue
 
-        presigned_url = generate_presigned_url(app.resume_url)
-        if not presigned_url:
-            continue
+#         presigned_url = generate_presigned_url(app.resume_url)
+#         if not presigned_url:
+#             continue
 
-        try:
-            # ✅ Download PDF from S3
-            response = requests.get(presigned_url)
-            resume_bytes = response.content
+#         try:
+#             # ✅ Download PDF from S3
+#             response = requests.get(presigned_url)
+#             resume_bytes = response.content
 
-            # ✅ Extract text from in-memory bytes
-            resume_text = extract_text_from_pdf_bytes(resume_bytes)
+#             # ✅ Extract text from in-memory bytes
+#             resume_text = extract_text_from_pdf_bytes(resume_bytes)
 
-            # ✅ Check if it's a valid resume
-            is_resume, resume_note, has_neg = looks_like_resume(resume_text)
+#             # ✅ Check if it's a valid resume
+#             is_resume, resume_note, has_neg = looks_like_resume(resume_text)
 
-            if not is_resume:
-                analysis_results.append({
-                    'application_id': app.application_id,
-                    'name': app.name,
-                    'valid_resume': False,
-                    'reason': resume_note,
-                    'score': 0,
-                    'resume_url': presigned_url,
-                })
-                continue
+#             if not is_resume:
+#                 analysis_results.append({
+#                     'application_id': app.application_id,
+#                     'name': app.name,
+#                     'valid_resume': False,
+#                     'reason': resume_note,
+#                     'score': 0,
+#                     'resume_url': presigned_url,
+#                 })
+#                 continue
 
-            # ✅ Calculate similarity
-            similarity = sbert_similarity_percent(job_description, resume_text)
-            if has_neg:
-                similarity = max(0, similarity - 10)
+#             # ✅ Calculate similarity
+#             similarity = sbert_similarity_percent(job_description, resume_text)
+#             if has_neg:
+#                 similarity = max(0, similarity - 10)
 
-            analysis_results.append({
-                'application_id': app.application_id,
-                'name': app.name,
-                'valid_resume': True,
-                'score': similarity,
-                'resume_url': presigned_url,
-            })
+#             analysis_results.append({
+#                 'application_id': app.application_id,
+#                 'name': app.name,
+#                 'valid_resume': True,
+#                 'score': similarity,
+#                 'resume_url': presigned_url,
+#             })
 
-        except Exception as e:
-            print(f"Error analyzing resume for {app.name}: {e}")
-            continue
+#         except Exception as e:
+#             print(f"Error analyzing resume for {app.name}: {e}")
+#             continue
 
-    return Response(analysis_results, status=200)
+#     return Response(analysis_results, status=200)
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -1281,82 +1316,82 @@ class HRViewSet(viewsets.ViewSet):
         return Response(serializer.data)
     
 
-    @action(detail=True, methods=["post"], url_path="analyze-resumes")
-    def analyze_resumes(self, request, pk=None):
-        job = self.get_object()
-        jd = job.description
-        applications = JobApplication.objects.filter(job=job)
+    # @action(detail=True, methods=["post"], url_path="analyze-resumes")
+    # def analyze_resumes(self, request, pk=None):
+    #     job = self.get_object()
+    #     jd = job.description
+    #     applications = JobApplication.objects.filter(job=job)
         
-        if not applications.exists():
-            return Response({"detail": "No applications found for this job."}, status=404)
+    #     if not applications.exists():
+    #         return Response({"detail": "No applications found for this job."}, status=404)
 
-        results = []
+    #     results = []
 
-        for app in applications:
-            resume_url = app.resume_url  # Assuming resumes are stored in S3 and URL is saved here
+    #     for app in applications:
+    #         resume_url = app.resume_url  # Assuming resumes are stored in S3 and URL is saved here
             
-            if not resume_url:
-                results.append({
-                    "application_id": app.application_id,
-                    "name": app.name,
-                    "status": app.status,
-                    "match": "Resume missing",
-                    "note": "No resume URL found."
-                })
-                continue
+    #         if not resume_url:
+    #             results.append({
+    #                 "application_id": app.application_id,
+    #                 "name": app.name,
+    #                 "status": app.status,
+    #                 "match": "Resume missing",
+    #                 "note": "No resume URL found."
+    #             })
+    #             continue
 
-            try:
-                # Download the PDF from S3
-                response = requests.get(resume_url)
-                response.raise_for_status()
+    #         try:
+    #             # Download the PDF from S3
+    #             response = requests.get(resume_url)
+    #             response.raise_for_status()
 
-                # Save to temp file
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                    tmp_file.write(response.content)
-                    resume_path = tmp_file.name
+    #             # Save to temp file
+    #             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+    #                 tmp_file.write(response.content)
+    #                 resume_path = tmp_file.name
 
-                # Extract & analyze
-                text = extract_text_from_pdf(resume_path)
-                is_resume, note, has_negatives = looks_like_resume(text)
+    #             # Extract & analyze
+    #             text = extract_text_from_pdf(resume_path)
+    #             is_resume, note, has_negatives = looks_like_resume(text)
 
-                if not is_resume:
-                    results.append({
-                        "application_id": app.application_id,
-                        "name": app.name,
-                        "status": app.status,
-                        "match": "Not a valid resume",
-                        "note": note
-                    })
-                    continue
+    #             if not is_resume:
+    #                 results.append({
+    #                     "application_id": app.application_id,
+    #                     "name": app.name,
+    #                     "status": app.status,
+    #                     "match": "Not a valid resume",
+    #                     "note": note
+    #                 })
+    #                 continue
 
-                percent = sbert_similarity_percent(jd, text)
-                if has_negatives:
-                    percent = max(0, percent - 10)
+    #             percent = sbert_similarity_percent(jd, text)
+    #             if has_negatives:
+    #                 percent = max(0, percent - 10)
 
-                label = "Strong match" if percent >= 70 else "Moderate match" if percent >= 50 else "Weak match"
+    #             label = "Strong match" if percent >= 70 else "Moderate match" if percent >= 50 else "Weak match"
 
-                results.append({
-                    "application_id": app.application_id,
-                    "name": app.name,
-                    "status": app.status,
-                    "match": label,
-                    "score": percent
-                })
+    #             results.append({
+    #                 "application_id": app.application_id,
+    #                 "name": app.name,
+    #                 "status": app.status,
+    #                 "match": label,
+    #                 "score": percent
+    #             })
 
-            except Exception as e:
-                results.append({
-                    "application_id": app.application_id,
-                    "name": app.name,
-                    "status": app.status,
-                    "match": "Error",
-                    "note": str(e)
-                })
+    #         except Exception as e:
+    #             results.append({
+    #                 "application_id": app.application_id,
+    #                 "name": app.name,
+    #                 "status": app.status,
+    #                 "match": "Error",
+    #                 "note": str(e)
+    #             })
 
-            finally:
-                if os.path.exists(resume_path):
-                    os.remove(resume_path)
+    #         finally:
+    #             if os.path.exists(resume_path):
+    #                 os.remove(resume_path)
 
-        return Response(results)
+    #     return Response(results)
 
 
     @action(detail=False, methods=['get'], url_path='users')

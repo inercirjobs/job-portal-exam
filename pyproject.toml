@@ -25,13 +25,9 @@ boto3 = "^1.40.2"
 razorpay = "^1.4.2"
 google-auth = "^2.40.3"
 setuptools = "^80.9.0"
-pymupdf = "^1.26.3"
-pypdf2 = "^3.0.1"
-pdfminer-six = ">=20221105,<20250000"
 pillow = "^11.3.0"
 pytesseract = "^0.3.13"
 sentence-transformers = "^5.1.0"
-pdfminer = "^20191125"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
