@@ -5,7 +5,7 @@ from typing import Tuple
 
 import fitz  # PyMuPDF
 from PyPDF2 import PdfReader
-from pdfminer.high_level import extract_text as pdfminer_extract_text
+# from pdfminer.high_level import extract_text as pdfminer_extract_text
 from PIL import Image
 import pytesseract
 from sentence_transformers import SentenceTransformer, util
@@ -49,6 +49,7 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
 
     # 1. PyMuPDF (fitz)
     try:
+        from pdfminer.high_level import extract_text as pdfminer_extract_text
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         text = "\n".join(page.get_text("text") for page in doc)
         doc.close()
