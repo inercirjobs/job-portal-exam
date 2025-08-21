@@ -4,6 +4,10 @@ version = "0.1.0"
 description = ""
 authors = ["SomuChaitanyaKumarReddy <145319559+SomuChaitanyaKumarReddy@users.noreply.github.com>"]
 
+packages = [
+    { include = "core" }
+]
+
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
 gunicorn = "^23.0.0"
