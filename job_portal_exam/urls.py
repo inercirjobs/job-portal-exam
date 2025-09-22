@@ -20,6 +20,7 @@ def favicon_view(request):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('core.urls')),
+    
 
     # # Redirect /favicon.ico requests to the static favicon file (e.g., .jpg or .png)
     # re_path(r'^favicon\.ico$', RedirectView.as_view(
