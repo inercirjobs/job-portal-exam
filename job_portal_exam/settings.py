@@ -23,7 +23,6 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_USER')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASS')
 
 
-SECRET_KEY = 'your-secret-key-here'
 
 ALLOWED_HOSTS = ['*']
 
