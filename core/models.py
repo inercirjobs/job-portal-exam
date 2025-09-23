@@ -99,7 +99,14 @@ class Admins(AbstractUser):
         unique=True
     )
 
+
+
+    username = models.CharField(max_length=225)  # Remove the username field
     email = models.EmailField(unique=True)
+
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = []
+
     password = models.CharField(max_length=225)
 
     groups = models.ManyToManyField(
