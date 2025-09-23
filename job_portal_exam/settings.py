@@ -128,6 +128,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8081",
     "http://localhost:8080",
     "https://www.incirclejobs.com",
+    "https://exam.incirclejobs.com",
     "https://incirclejobs.com",
 ]
 
