@@ -29,6 +29,7 @@ pillow = "^11.3.0"
 pytesseract = "^0.3.13"
 sentence-transformers = "^5.1.0"
 pytz = "^2025.2"
+django-filter = "^25.1"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

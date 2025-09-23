@@ -320,11 +320,113 @@ class AdminListView(APIView):
         admins = Admins.objects.all()
         serializer = AdminSerializer(admins, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
+from rest_framework import status
+
+class Pagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.db.models import Q
 
 class UserListView(APIView):
-    authentication_classes = []  # No auth required, optional
+    authentication_classes = []
     permission_classes = [AllowAnyPermission]
+
     def get(self, request):
-        users = User.objects.all()
-        serializer = UserSerializer(users, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        search = request.GET.get('search', '')
+        college_code = request.GET.get('college_code')
+        score_gt = request.GET.get('score_gt')
+        score_lt = request.GET.get('score_lt')
+        ordering = request.GET.get('ordering')  # e.g., 'score' or '-score'
+
+        queryset = User.objects.all()
+
+        # Apply search filter (exam, email, roll_number)
+        if search:
+            queryset = queryset.filter(
+                Q(exam__id__icontains=search) |
+                Q(email__icontains=search) |
+                Q(roll_number__icontains=search)
+            )
+
+        # Filter by college_code
+        if college_code:
+            queryset = queryset.filter(college_code=college_code)
+
+        # Filter by score greater than
+        if score_gt:
+            queryset = queryset.filter(score__gt=score_gt)
+
+        # Filter by score less than
+        if score_lt:
+            queryset = queryset.filter(score__lt=score_lt)
+
+        # Apply ordering (only by score)
+        if ordering in ['score', '-score']:
+            queryset = queryset.order_by(ordering)
+
+        # Paginate results
+        paginator = Pagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = UserSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+@api_view(['DELETE'])
+@authentication_classes([])  # No authentication
+@permission_classes([AllowAnyPermission])
+def delete_user_view(request, id):
+    user = get_object_or_404(User, id=id)
+    user.delete()
+    return Response({"detail": "User deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+
+
+
+
+ 
+@api_view(['PUT'])
+@authentication_classes([])
+@permission_classes([AllowAnyPermission])
+def edit_exam_question(request, id):
+    question = get_object_or_404(ExamQuestion, id=id)
+    serializer = ExamQuestionSerializer(question, data=request.data, partial=True)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['DELETE'])
+@authentication_classes([])
+@permission_classes([AllowAnyPermission])
+def delete_exam_question(request, id):
+    question = get_object_or_404(ExamQuestion, id=id)
+    question.delete()
+    return Response({"detail": "Question deleted successfully."}, status=status.HTTP_204_NO_CONTENT)   
+
+
+@api_view(['PUT'])
+@authentication_classes([])
+@permission_classes([AllowAnyPermission])
+def edit_exam_schedule(request, id):
+    schedule = get_object_or_404(ExamSchedule, id=id)
+    serializer = ExamScheduleSerializer(schedule, data=request.data, partial=True)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['DELETE'])
+@authentication_classes([])
+@permission_classes([AllowAnyPermission])
+def delete_exam_schedule(request, id):
+    schedule = get_object_or_404(ExamSchedule, id=id)
+    schedule.delete()
+    return Response({"detail": "Schedule deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
