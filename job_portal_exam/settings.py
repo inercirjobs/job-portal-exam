@@ -129,6 +129,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "https://www.incirclejobs.com",
     "https://incirclejobs.com",
+    "https://exam.incirclejobs.com",
 ]
 
 # Media files
