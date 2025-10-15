@@ -18,6 +18,17 @@ def generate_custom_schedule_id():
     chars = string.ascii_letters + string.digits
     return f"schdle{''.join(secrets.choice(chars) for _ in range(10))}"
 
+class Question(models.Model):
+    question_text = models.TextField()
+    options = models.JSONField()  # Store options as JSON array
+    correct_answer = models.CharField(max_length=255)
+    marks = models.IntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Question {self.id}: {self.question_text[:50]}..."
+
 # ------------------------------
 # ExamSchedule Model
 # ------------------------------
@@ -99,14 +110,7 @@ class Admins(AbstractUser):
         unique=True
     )
 
-
-
-    username = models.CharField(max_length=225)  # Remove the username field
     email = models.EmailField(unique=True)
-
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = []
-
     password = models.CharField(max_length=225)
 
     groups = models.ManyToManyField(

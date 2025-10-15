@@ -26,12 +26,8 @@ urlpatterns = [
     path('exam-schedules/', views.ExamScheduleListView.as_view(), name='exam-schedules'),
     path('admins/', views.AdminListView.as_view(), name='admins-list'),
     path('users/', views.UserListView.as_view(), name='users-list'),
-    path('delete-user/<str:id>/', views.delete_user_view, name='delete-user'),
+    path('show-pending-requests/', views.ShowPendingRequestsView.as_view(), name='show-pending-requests'),
 
-    path('edit-question/<str:id>/', views.edit_exam_question, name='edit-question'),
-    path('delete-question/<str:id>/', views.delete_exam_question, name='delete-question'),
-    path('edit-schedule/<str:id>/', views.edit_exam_schedule, name='edit-schedule'),
-    path('delete-schedule/<str:id>/', views.delete_exam_schedule, name='delete-schedule'),
 
     # API routes
     path('', include(router.urls)),

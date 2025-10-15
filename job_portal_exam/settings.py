@@ -23,7 +23,7 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_USER')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASS')
 
 
-SECRET_KEY = os.environ.get('SECRET_KEY')
+SECRET_KEY = 'your-secret-key-here'
 
 ALLOWED_HOSTS = ['*']
 
@@ -35,12 +35,11 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
-    'rest_framework.authtoken',
-    'corsheaders',
-    'storages',
-    'core.apps.CoreConfig',  # Your main app
-    # 'jobs.apps.JobsConfig',
+    'django_redis',
+    'core',
 ]
+
+# Redis settings will be imported after INSTALLED_APPS
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -96,17 +95,10 @@ DATABASES = {
     }
 }
 
-# Cache setup (using default local memory or Redis in production)
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "unique-snowflake",
-    }
-}
-# Custom User Model
-AUTH_USER_MODEL = 'core.User'
+# Import Redis settings at the top level
+from .redis_settings import REDIS_URL, CACHES, REST_FRAMEWORK as REDIS_REST_FRAMEWORK
 
-# REST Framework
+# Base REST_FRAMEWORK settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
@@ -116,8 +108,15 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20
+    'PAGE_SIZE': 20,
 }
+
+# Update REST_FRAMEWORK settings with Redis configuration
+REST_FRAMEWORK.update(REDIS_REST_FRAMEWORK)
+# Custom User Model
+AUTH_USER_MODEL = 'core.User'
+
+# REST Framework settings moved to top of file
 
 # CORS
 CORS_ALLOWED_ORIGINS = [
@@ -128,7 +127,6 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8081",
     "http://localhost:8080",
     "https://www.incirclejobs.com",
-    "https://exam.incirclejobs.com",
     "https://incirclejobs.com",
 ]
 
