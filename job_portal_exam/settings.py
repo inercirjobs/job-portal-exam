@@ -50,6 +50,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'middleware.vpn_blocker.VPNBlockerMiddleware',
 ]
 
 ROOT_URLCONF = 'job_portal_exam.urls'
