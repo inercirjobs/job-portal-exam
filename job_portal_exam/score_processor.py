@@ -1,51 +1,39 @@
-from job_portal_exam.redis_settings import get_redis
+"""Score processing utilities without Redis dependency.
+
+This module removes Redis usage and updates user scores directly in the database.
+Queued processing via Redis is no longer used in local development; the functions
+remain as safe fallbacks that won't raise on missing infrastructure.
+"""
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def queue_score_submission(session_id, score_data):
-    """Queue a score submission for batch processing"""
-    redis = get_redis()
-    submission_key = f'score_submission:{session_id}'
-    redis.setex(submission_key, 3600, json.dumps(score_data))  # Store for 1 hour
-    redis.sadd('pending_submissions', session_id)
+    """Directly write score data to the database as a fallback for environments without Redis.
+
+    This will create or update the User.score field (if a User with that id exists). The function
+    logs failures but does not raise so scheduled tasks remain resilient.
+    """
+    try:
+        from core.models import User
+        try:
+            user = User.objects.get(id=session_id)
+            # Expect score to be present in score_data
+            user.score = score_data.get('score')
+            user.save(update_fields=['score'])
+        except User.DoesNotExist:
+            logger.warning("queue_score_submission: User with id %s does not exist", session_id)
+    except Exception:
+        logger.exception("Unexpected error when directly saving score for session %s", session_id)
+
 
 def process_pending_submissions(batch_size=50):
-    """Process pending submissions in batches"""
-    from core.models import User
-    redis = get_redis()
-    
-    while True:
-        # Pop up to batch_size pending submissions one by one
-        pending = []
-        for _ in range(batch_size):
-            sid = redis.spop('pending_submissions')
-            if not sid:
-                break
-            pending.append(sid)
-        if not pending:
-            break
-        submissions_to_process = []
-        for session_id in pending:
-            session_id = session_id.decode('utf-8') if isinstance(session_id, bytes) else session_id
-            submission_key = f'score_submission:{session_id}'
-            submission_data = redis.get(submission_key)
-            
-            if submission_data:
-                submission_data = json.loads(submission_data)
-                submissions_to_process.append({
-                    'session_id': session_id,
-                    'score': submission_data.get('score'),
-                    'submission_time': submission_data.get('submission_time')
-                })
-                redis.delete(submission_key)
-        
-        # Bulk update users
-        if submissions_to_process:
-            user_updates = []
-            for submission in submissions_to_process:
-                try:
-                    user = User.objects.get(id=submission['session_id'])
-                    user.score = submission['score']
-                    user_updates.append(user)
-                except User.DoesNotExist:
-                    continue
-            
-            if user_updates:
-                User.objects.bulk_update(user_updates, ['score'])
+    """No-op processor for environments without Redis.
+
+    The scheduled job will call this function periodically. Since there is no Redis queue,
+    this function currently performs no work but exists to maintain the scheduler contract.
+    """
+    logger.debug("process_pending_submissions called but Redis queue is disabled; nothing to do")
+    return

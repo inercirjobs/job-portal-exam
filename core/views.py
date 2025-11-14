@@ -10,20 +10,21 @@ import razorpay
 import random
 import json
 from botocore.exceptions import ClientError
-from job_portal_exam.redis_settings import get_redis
+from job_portal_exam.redis_settings import get_cache, CACHE_TTL
 from django.core.cache import cache
 from .models import ExamQuestion, User
 from job_portal_exam.redis_settings import get_redis, CACHE_TTL
 from .serializers import UserSerializer
 
 def cache_exam_questions():
-    """Cache all exam questions in Redis"""
-    redis = get_redis()
+    """Cache all exam questions using Django cache (fallback to DB when cache not available)."""
+    cache_client = get_cache() or cache
     questions = ExamQuestion.objects.all()
     total = questions.count()
     if total == 0:
         return 0
-    # Cache each question
+
+    data = []
     for question in questions:
         question_data = {
             'id': question.id,
@@ -34,9 +35,14 @@ def cache_exam_questions():
             'option_4': question.option_4,
             'correct_answer': question.correct_answer
         }
-        redis.hset('questions', str(question.id), json.dumps(question_data))
-    # Set total questions count
-    redis.set('total_questions', total)
+        data.append(question_data)
+
+    try:
+        cache_client.set('exam_questions', json.dumps(data), CACHE_TTL)
+        cache_client.set('total_questions', total, CACHE_TTL)
+    except Exception:
+        logger.exception('Failed to write exam questions to cache')
+
     return total
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import api_view, permission_classes, action
@@ -281,26 +287,32 @@ class StartExamView(APIView):
     throttle_classes = [UserRateThrottle]  # Add rate limiting
 
     def post(self, request):
-        redis = get_redis()
-        exam_id = request.data.get('exam')
+        # Accept either 'exam' or 'exam_id' from clients to be more forgiving
+        exam_id = request.data.get('exam') or request.data.get('exam_id')
+
+        # If exam_id is not provided, skip exam logic and just create user and session with minimal info
         if not exam_id:
-            return Response({'error': 'Exam ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
+            # Accept 'phone' in body and map to 'first_name'
+            data = request.data.copy()
+            if 'phone' in data:
+                data['first_name'] = data['phone']
+            serializer = UserSerializer(data=data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            user = serializer.save()
+            return Response({
+                'message': 'Exam started (no exam_id provided).',
+                'session_id': user.id,
+                'phone': user.first_name,
+                'time_left': None
+            }, status=status.HTTP_201_CREATED)
 
-        # Try to get exam from cache with pipeline
-        pipe = redis.pipeline()
-        pipe.get(f'exam:{exam_id}')
-        pipe.get(f'exam_questions:{exam_id}')
-        cached_exam, cached_questions = pipe.execute()
-
-        if cached_exam:
-            exam_data = json.loads(cached_exam)
-        else:
-            try:
-                exam = ExamSchedule.objects.get(id=exam_id)
-                exam_data = ExamScheduleSerializer(exam).data
-                redis.setex(f'exam:{exam_id}', 3600, json.dumps(exam_data))
-            except ExamSchedule.DoesNotExist:
-                return Response({'error': 'Invalid exam ID.'}, status=status.HTTP_404_NOT_FOUND)
+        # Get exam from DB
+        try:
+            exam = ExamSchedule.objects.get(id=exam_id)
+            exam_data = ExamScheduleSerializer(exam).data
+        except ExamSchedule.DoesNotExist:
+            return Response({'error': 'Invalid exam ID.'}, status=status.HTTP_404_NOT_FOUND)
 
         # Get timezone and current time (do this early)
         ist = pytz.timezone('Asia/Kolkata')
@@ -331,48 +343,36 @@ class StartExamView(APIView):
                 "message": f"Exam starts in {str(wait_time).split('.')[0]}"
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check active sessions with pipeline
-        pipe = redis.pipeline()
-        pipe.scard('active_exam_sessions')
-        pipe.get(f'exam_questions:{exam_id}')  # Try to get cached questions again
-        active_count, questions = pipe.execute()
-
-        if active_count >= 1000:
-            return Response({
-                "message": "Maximum users reached. Try again later."
-            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        # Get or prepare questions (moved after validation to avoid unnecessary work)
-        if not cached_questions:
-            questions = get_or_cache_exam_questions(exam_id)
-        else:
-            questions = json.loads(cached_questions)
+        # Get or prepare questions (no Redis, just DB)
+        questions = get_or_cache_exam_questions(exam_id)
 
         # Create user and prepare session
-        serializer = UserSerializer(data=request.data)
+        # Accept 'phone' in body and map to 'first_name'
+        data = request.data.copy()
+        if 'phone' in data:
+            data['first_name'] = data['phone']
+        serializer = UserSerializer(data=data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         user = serializer.save()
         time_left = exam_end_dt - current_time
 
-        # Prepare exam session with questions using pipeline
-        pipe = redis.pipeline()
-        
-        # Session data with questions
-        session_data = prepare_exam_session(
-            user.id, exam_id, current_time, 
-            exam_end_dt, questions
-        )
+        # Prepare exam session (no Redis, just return info)
+        session_data = {
+            'user_id': user.id,
+            'exam_id': exam_id,
+            'start_time': str(current_time),
+            'end_time': str(exam_end_dt),
+            'questions': questions
+        }
 
         return Response({
             'message': 'Exam started.',
             'session_id': user.id,
-            'email': user.email,
+            'phone': user.first_name,
             'time_left': str(time_left).split('.')[0]
         }, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class SubmitScoreView(APIView):
@@ -381,68 +381,28 @@ class SubmitScoreView(APIView):
     throttle_classes = [UserRateThrottle]  # Add rate limiting
 
     def post(self, request, session_id):
-        redis = get_redis()
-        # Check if session exists in Redis
-        session_data = get_exam_session(session_id)
-        if not session_data:
-            return Response({'error': 'Invalid or expired session ID'}, status=404)
+        # session_id is fetched from the URL by Django and passed as an argument
+        print(f"[SubmitScoreView] Received session_id from URL: {session_id}")
+        # No Redis: just use DB
+        user = User.objects.filter(id=session_id).first()
+        if not user:
+            return Response({'error': 'Invalid or expired session ID', 'session_id': session_id}, status=404)
 
         score = request.data.get('score')
         if not score:
             return Response({'error': 'Score is required'}, status=400)
 
         try:
-            # Prepare submission data
-            submission_data = {
-                'score': score,
-                'submission_time': timezone.now().isoformat(),
-                'user_id': session_id,
-                'exam_id': session_data.get('exam_id')
-            }
-
-            active_count = redis.scard('active_exam_sessions')
-            if active_count >= 1000:
-                # Queue the submission for batch processing
-                queue_score_submission(session_id, submission_data)
-                # Update session data in Redis
-                session_data['score'] = score
-                session_data['submission_time'] = submission_data['submission_time']
-                update_exam_session(session_id, session_data.get('exam_id'), {'score': score, 'submission_time': submission_data['submission_time']})
-                # Remove from active sessions
-                redis.srem('active_exam_sessions', session_id)
-                return Response({
-                    'message': 'Score submitted successfully',
-                    'session_id': session_id,
-                    'score': score,
-                    'status': 'queued for processing'
-                }, status=202)
-            else:
-                # Save directly to DB (example: update User or create Score model)
-                user = User.objects.filter(id=session_id).first()
-                if user:
-                    user.score = str(score)
-                    user.save()
-                # Update session data in Redis
-                session_data['score'] = score
-                session_data['submission_time'] = submission_data['submission_time']
-                update_exam_session(session_id, session_data.get('exam_id'), {'score': score, 'submission_time': submission_data['submission_time']})
-                # Remove from active sessions
-                redis.srem('active_exam_sessions', session_id)
-                return Response({
-                    'message': 'Score submitted successfully',
-                    'session_id': session_id,
-                    'score': score,
-                    'status': 'saved'
-                }, status=200)
-
-        except Exception as e:
-            # Log error and store failed submission for retry
-            redis.sadd('failed_submissions', json.dumps({
+            user.score = str(score)
+            user.save()
+            return Response({
+                'message': 'Score submitted successfully',
                 'session_id': session_id,
+                'phone': user.first_name,  # Use first_name as phone
                 'score': score,
-                'error': str(e),
-                'timestamp': timezone.now().isoformat()
-            }))
+                'status': 'saved'
+            }, status=200)
+        except Exception as e:
             return Response({'error': str(e)}, status=500)
 
 
@@ -453,31 +413,35 @@ class ExamQuestionListView(APIView):
     throttle_classes = [UserRateThrottle]  # Add rate limiting
 
     def get(self, request):
-        redis = get_redis()
-        # Check if cache initialization is needed
-        if not redis.exists('total_questions'):
-            total = cache_exam_questions()
-            if total == 0:
-                return Response({
-                    'error': 'No questions available'
-                }, status=404)
-        
-        # Get all questions from cache
+        # Use DB directly and optionally cache results for faster responses
+        cache_client = get_cache() or cache
+        try:
+            cached = cache_client.get('exam_questions')
+            if cached:
+                questions_data = json.loads(cached)
+                return Response(questions_data)
+        except Exception:
+            # ignore cache errors and fall back to DB
+            pass
+
+        questions = ExamQuestion.objects.all()
         questions_data = []
-        for key in redis.hkeys('questions'):
-            question_json = redis.hget('questions', key)
-            if question_json:
-                question_data = json.loads(question_json)
-                # Ensure output format: id, question, option_1, option_2, option_3, option_4, correct_answer
-                questions_data.append({
-                    'id': question_data.get('id'),
-                    'question': question_data.get('question'),
-                    'option_1': question_data.get('option_1'),
-                    'option_2': question_data.get('option_2'),
-                    'option_3': question_data.get('option_3'),
-                    'option_4': question_data.get('option_4'),
-                    'correct_answer': question_data.get('correct_answer'),
-                })
+        for q in questions:
+            questions_data.append({
+                'id': q.id,
+                'question': q.question,
+                'option_1': q.option_1,
+                'option_2': q.option_2,
+                'option_3': q.option_3,
+                'option_4': q.option_4,
+                'correct_answer': q.correct_answer
+            })
+
+        try:
+            cache_client.set('exam_questions', json.dumps(questions_data), CACHE_TTL)
+        except Exception:
+            logger.exception('Failed to cache exam questions')
+
         return Response(questions_data)
 
 
@@ -602,11 +566,16 @@ def prepare_exam_session(user_id, exam_id, start_time, end_time, questions):
     return session_data
 def get_or_cache_exam_questions(exam_id):
     """Fetch and cache exam questions for a given exam_id."""
-    redis = get_redis()
+    cache_client = get_cache() or cache
     cache_key = f'exam_questions:{exam_id}'
-    cached = redis.get(cache_key)
-    if cached:
-        return json.loads(cached)
+    try:
+        cached = cache_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        # ignore cache errors
+        pass
+
     # Fetch all questions (no exam_id field exists)
     questions = ExamQuestion.objects.all()
     data = []
@@ -620,6 +589,11 @@ def get_or_cache_exam_questions(exam_id):
             'option_4': q.option_4,
             'correct_answer': q.correct_answer
         })
-    redis.setex(cache_key, 3600, json.dumps(data))
+
+    try:
+        cache_client.set(cache_key, json.dumps(data), CACHE_TTL)
+    except Exception:
+        logger.exception('Failed to cache exam questions by id')
+
     return data
 from django.utils.crypto import get_random_string

@@ -50,6 +50,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'middleware.vpn_blocker.VPNBlockerMiddleware',
 ]
 
 ROOT_URLCONF = 'job_portal_exam.urls'
@@ -128,6 +129,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
     "https://www.incirclejobs.com",
     "https://incirclejobs.com",
+    "https://exam.incirclejobs.com",
 ]
 
 # Media files

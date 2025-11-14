@@ -16,7 +16,7 @@ import uuid
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'full_name', 'roll_number', 'email', 'college_code', 'exam', 'created_at', 'score']
+        fields = ['id', 'first_name', 'full_name', 'roll_number', 'email', 'college_code', 'exam', 'created_at', 'score']
         read_only_fields = ['id', 'created_at', 'score']
 
     def create(self, validated_data):
@@ -36,6 +36,11 @@ class AdminSerializer(serializers.ModelSerializer):
         }
 
     def create(self, validated_data):
+        # Ensure a username is set (AbstractUser requires it and it's unique).
+        # Prefer the email as username; if not present, generate a short unique identifier.
+        import uuid as _uuid
+        username = validated_data.get('email') or f"admin_{_uuid.uuid4().hex[:10]}"
+        validated_data['username'] = username
         validated_data['password'] = make_password(validated_data['password'])  # Hash password
         return super().create(validated_data)
 

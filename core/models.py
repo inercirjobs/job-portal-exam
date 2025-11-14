@@ -6,7 +6,7 @@ import string
 
 # Utility Functions
 def generate_custom_user_id():
-    chars = string.ascii_letters + string.digits + "-_.~!$'()*@"
+    chars = string.ascii_letters + string.digits
     random_id = ''.join(secrets.choice(chars) for _ in range(10))
     return f"user_{random_id}"
 
